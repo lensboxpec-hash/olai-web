@@ -12,11 +12,11 @@ const OWNER_REPO = "lensboxpec-hash/olai-web";
 
 export function mirrorsFor(path) {
   return [
-    `./${path}`,                                                     // local / Pages
-    `../${path}`,                                                    // opened from web/
-    `https://raw.githubusercontent.com/${OWNER_REPO}/main/${path}`,   // raw (CORS: *)
-    `https://cdn.jsdelivr.net/gh/${OWNER_REPO}@main/${path}`,         // jsDelivr CDN
-    `https://raw.githubusercontent.com/${OWNER_REPO}/packets/${path}`,// packets branch
+    `./${path}`,                                                      // local / Pages
+    `../${path}`,                                                     // opened from web/
+    `https://raw.githubusercontent.com/${OWNER_REPO}/weights/${path}`, // weights branch (CORS: *)
+    `https://cdn.jsdelivr.net/gh/${OWNER_REPO}@weights/${path}`,       // jsDelivr CDN
+    `https://raw.githubusercontent.com/${OWNER_REPO}/main/${path}`,    // main branch
   ];
 }
 

@@ -70,7 +70,7 @@ jobs:
             --out rebuilt.safetensors \
             --expect-sha256 135922caef64e81e52af88ede8b7c3ddaa9d6da220a9737fb3065275dbfb4330
 
-      - name: Push packets to orphan `packets` branch
+      - name: Push packets to orphan `weights` branch (packets at branch root)
         env:
           PAT: ${{ secrets.OLAI_PAT }}
           TKN: ${{ secrets.GITHUB_TOKEN }}
@@ -79,10 +79,14 @@ jobs:
           TOKEN="${PAT:-$TKN}"
           git config user.name  "olai-pack-bot"
           git config user.email "olai-pack-bot@users.noreply.github.com"
-          git checkout --orphan packets-publish
+          git checkout --orphan weights-publish
           git rm -rf --cached . -q || true
           git add -f packets graph/lfm3-graph.json
           git commit -q -m "OLAI-GRAPH packets: LFM3-1.7B mode=${{ inputs.mode }} run=${{ github.run_id }}"
+          # flatten: *.pkt at branch root → clean mirror URLs
+          git mv packets/*.pkt .
+          rmdir packets || true
+          git commit -q --amend --no-edit
           git remote set-url origin "https://x-access-token:${TOKEN}@github.com/${{ github.repository }}.git"
-          git push -q -f origin packets-publish:packets
-          echo "pushed $(git rev-parse HEAD) to packets branch"
+          git push -q -f origin weights-publish:weights
+          echo "pushed $(git rev-parse HEAD) to weights branch"

@@ -62,21 +62,22 @@ LICENSE                    ← LFM Open License v1.0 (weights belong to Liquid A
 
 Actions → **pack-lfm3** → Run workflow:
 - `mode=sample` — packs LFM3 layer-0 (~156 MB → ~80 packets) and pushes to the
-  `packets` branch. Fast smoke of the whole pipeline.
+  `weights` branch. Fast smoke of the whole pipeline.
 - `mode=full` — downloads the 3.46 GB patient in CI, packs all 1,791 packets,
-  verifies every hash, pushes to `packets` and rewrites `graph/lfm3-graph.json`
-  with real hashes.
+  verifies every hash, proves the bit-exact rebuild, pushes to `weights` and
+  rewrites `graph/lfm3-graph.json` with real hashes.
 
 The runner needs no secrets for HF (public weights); it needs only the default
 `GITHUB_TOKEN` (or the configured `OLAI_PAT`) to push the branch.
 
 ## Mirrors ("multiple DBs")
 
-The runtime tries mirrors in order and remembers the fastest:
+The runtime tries mirrors in order and remembers the fastest. The `weights`
+branch is an orphan branch whose root IS the packet set (plus `graph/`):
 
-1. `https://raw.githubusercontent.com/<owner>/olai-web/packets/`
-2. `https://cdn.jsdelivr.net/gh/<owner>/olai-web@packets/` (CDN, ≤20 MB files — perfect for 2 MB packets)
-3. `https://<owner>.github.io/olai-web/packets/`
+1. `https://raw.githubusercontent.com/<owner>/olai-web/weights/<packet>` (CORS: `*`)
+2. `https://cdn.jsdelivr.net/gh/<owner>/olai-web@weights/<packet>` (CDN, ≤20 MB files — perfect for 2 MB packets)
+3. `https://<owner>.github.io/olai-web/…` (Pages, for the site's own manifests/samples)
 
 All three are GitHub; the graph just names packet paths, so mirrors are free.
 

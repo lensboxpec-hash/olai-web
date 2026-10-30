@@ -70,7 +70,7 @@ jobs:
             --out rebuilt.safetensors \
             --expect-sha256 135922caef64e81e52af88ede8b7c3ddaa9d6da220a9737fb3065275dbfb4330
 
-      - name: Push packets to orphan `weights` branch (packets at branch root)
+      - name: Push packets to orphan `weights` branch (batched — GitHub rejects >2GB pushes)
         env:
           PAT: ${{ secrets.OLAI_PAT }}
           TKN: ${{ secrets.GITHUB_TOKEN }}
@@ -81,12 +81,30 @@ jobs:
           git config user.email "olai-pack-bot@users.noreply.github.com"
           git checkout --orphan weights-publish
           git rm -rf --cached . -q || true
-          git add -f packets graph/lfm3-graph.json
-          git commit -q -m "OLAI-GRAPH packets: LFM3-1.7B mode=${{ inputs.mode }} run=${{ github.run_id }}"
-          # flatten: *.pkt at branch root → clean mirror URLs
-          git mv packets/*.pkt .
-          rmdir packets || true
-          git commit -q --amend --no-edit
           git remote set-url origin "https://x-access-token:${TOKEN}@github.com/${{ github.repository }}.git"
-          git push -q -f origin weights-publish:weights
-          echo "pushed $(git rev-parse HEAD) to weights branch"
+
+          # stage packets at branch root in ~400 MB batches; commit+push each
+          batch_bytes=0
+          batch_files=()
+          commit_n=0
+          for f in packets/*.pkt; do
+            sz=$(stat -c%s "$f")
+            batch_files+=("$f")
+            batch_bytes=$((batch_bytes + sz))
+            if [ "$batch_bytes" -gt 400000000 ]; then
+              git add -f "${batch_files[@]}"
+              git mv "${batch_files[@]}" .
+              git commit -q -m "OLAI-GRAPH packets batch $((commit_n += 1)) (mode=${{ inputs.mode }})"
+              git push -q origin weights-publish:weights
+              batch_files=()
+              batch_bytes=0
+            fi
+          done
+          if [ "${#batch_files[@]}" -gt 0 ]; then
+            git add -f "${batch_files[@]}"
+            git mv "${batch_files[@]}" .
+          fi
+          git add -f graph/lfm3-graph.json
+          git commit -q -m "OLAI-GRAPH packets final batch $((commit_n += 1)) + graph manifest (run=${{ github.run_id }})"
+          git push -q origin weights-publish:weights
+          echo "pushed $(git rev-parse HEAD) to weights branch in $commit_n batch(es)"

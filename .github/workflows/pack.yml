@@ -1,0 +1,88 @@
+name: pack-lfm3
+
+# Packs the LiquidAI LFM3-1.7B patient into OLAI-GRAPH tiny packets.
+#   mode=sample : layer-0 tensors only (~156 MB → ~80 packets), fast smoke.
+#   mode=full   : the whole 3.46 GB → 1,791 packets → pushed to `packets`.
+# Push uses secrets.OLAI_PAT when present, else the default GITHUB_TOKEN.
+
+on:
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: "sample = first layer only; full = entire model"
+        default: "sample"
+        type: choice
+        options: [sample, full]
+
+permissions:
+  contents: write
+
+jobs:
+  pack:
+    runs-on: ubuntu-latest
+    timeout-minutes: 300
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install packer deps
+        run: pip install zstandard
+
+      - name: Fetch patient weights (public, no HF token needed)
+        run: |
+          set -e
+          curl -sL --retry 5 -o model.safetensors \
+            https://huggingface.co/LiquidAI/LFM3-1.7B/resolve/main/model.safetensors
+          curl -sL --retry 5 -o config.json \
+            https://huggingface.co/LiquidAI/LFM3-1.7B/resolve/main/config.json
+          echo "fingerprint:"
+          sha256sum model.safetensors
+
+      - name: Pack into tiny graph packets
+        run: |
+          set -e
+          if [ "${{ inputs.mode }}" = "full" ]; then
+            python tools/pack.py \
+              --src model.safetensors --out packets \
+              --manifest graph/lfm3-graph.json \
+              --model "LiquidAI/LFM3-1.7B" --config config.json \
+              --zstd-level 12 \
+              --expect-sha256 135922caef64e81e52af88ede8b7c3ddaa9d6da220a9737fb3065275dbfb4330
+          else
+            python tools/pack.py \
+              --src model.safetensors --out packets \
+              --manifest graph/lfm3-graph.json \
+              --model "LiquidAI/LFM3-1.7B" --config config.json \
+              --zstd-level 12 --match "layers\.0\."
+          fi
+
+      - name: Verify every packet hash
+        run: python tools/verify.py --manifest graph/lfm3-graph.json --packets packets
+
+      - name: Bit-exact rebuild proof (full mode only)
+        if: inputs.mode == 'full'
+        run: |
+          python tools/unpack.py \
+            --manifest graph/lfm3-graph.json --packets packets \
+            --out rebuilt.safetensors \
+            --expect-sha256 135922caef64e81e52af88ede8b7c3ddaa9d6da220a9737fb3065275dbfb4330
+
+      - name: Push packets to orphan `packets` branch
+        env:
+          PAT: ${{ secrets.OLAI_PAT }}
+          TKN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -e
+          TOKEN="${PAT:-$TKN}"
+          git config user.name  "olai-pack-bot"
+          git config user.email "olai-pack-bot@users.noreply.github.com"
+          git checkout --orphan packets-publish
+          git rm -rf --cached . -q || true
+          git add -f packets graph/lfm3-graph.json
+          git commit -q -m "OLAI-GRAPH packets: LFM3-1.7B mode=${{ inputs.mode }} run=${{ github.run_id }}"
+          git remote set-url origin "https://x-access-token:${TOKEN}@github.com/${{ github.repository }}.git"
+          git push -q -f origin packets-publish:packets
+          echo "pushed $(git rev-parse HEAD) to packets branch"

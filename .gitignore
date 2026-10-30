@@ -1,0 +1,8 @@
+# CI working files
+model.safetensors
+rebuilt.safetensors
+config.json
+packets/
+__pycache__/
+node_modules/
+.DS_Store

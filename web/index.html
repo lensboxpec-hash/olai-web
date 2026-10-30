@@ -1,0 +1,65 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ஓலை OLAI-GRAPH — LFM3 as tiny packets, 100% frontend</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<header>
+  <h1>ஓலை <span class="thin">OLAI-GRAPH</span></h1>
+  <p class="sub">
+    <b>LiquidAI/LFM3-1.7B</b> re-dressed as a graph of tiny self-verifying packets —
+    no backend, no monolithic download. The browser is the runner.
+  </p>
+  <p id="gpu-status" class="hint">probing WebGPU…</p>
+</header>
+
+<main>
+  <section>
+    <h2>1 · The patient, mapped</h2>
+    <div id="lfm3-stats" class="panel">loading graph…</div>
+  </section>
+
+  <section>
+    <h2>2 · Paging plan (the graph walk order)</h2>
+    <div id="plan" class="panel scroll">loading…</div>
+  </section>
+
+  <section>
+    <h2>3 · Real packets, right now</h2>
+    <div id="sample-stats" class="panel">loading…</div>
+    <button id="btn-packet" disabled>Fetch + verify a real weight packet</button>
+    <div id="packet-view" class="panel">—</div>
+    <button id="btn-gemv" disabled>Run a GPU mat-vec on REAL patient weights</button>
+    <div id="gemv-view" class="panel">— (needs WebGPU)</div>
+  </section>
+
+  <section>
+    <h2>4 · Doctrine</h2>
+    <div class="panel">
+      <ul>
+        <li><b>No pruning.</b> Every byte of the weight file lands in exactly one packet — even unclaimed bytes become <code>__gap__</code>/<code>__file_tail__</code> nodes.</li>
+        <li><b>No quantization.</b> Payload bytes are the patient's own bytes; zstd is bit-exact on decode. Roundtrip proven: <code>1c9c77a4…3ea4e</code>.</li>
+        <li><b>No "impossible".</b> Same information, new shape — chosen so HTTP, CDNs, browsers and WebGPU can all chew it.</li>
+      </ul>
+    </div>
+  </section>
+
+  <section>
+    <h2>Console</h2>
+    <div id="console" class="panel scroll"></div>
+  </section>
+</main>
+
+<footer>
+  Weights © Liquid AI — LFM Open License v1.0 (redistribution permitted with
+  attribution; this is a mechanical transformation). Format & runtime: OLAI project.
+  <a href="https://github.com/lensboxpec-hash/olai-web">source</a> ·
+  <a href="https://huggingface.co/LiquidAI/LFM3-1.7B">patient</a>
+</footer>
+
+<script type="module" src="app.js"></script>
+</body>
+</html>

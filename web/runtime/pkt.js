@@ -43,7 +43,7 @@ export async function decodePacket(buf, fzstd) {
     if (!lib) throw new Error("zstd packet but fzstd not loaded (add runtime/fzstd.js script)");
     raw = lib.decompress(p.payload);
   } else {
-    raw = p.payload;
+    raw = p.payload.slice(); // copy → aligned buffer (bf16 Uint16 views need even offsets)
   }
   if (raw.length !== p.rawLen) throw new Error(`rawLen mismatch ${raw.length} != ${p.rawLen}`);
   const hex = await sha256Hex(raw);

@@ -76,7 +76,7 @@ The runtime tries mirrors in order and remembers the fastest. The `weights`
 branch is an orphan branch whose root IS the packet set (plus `graph/`):
 
 1. `https://raw.githubusercontent.com/<owner>/olai-web/weights/<packet>` (CORS: `*`)
-2. `https://cdn.jsdelivr.net/gh/<owner>/olai-web@weights/<packet>` (CDN, ≤20 MB files — perfect for 2 MB packets)
+2. `https://cdn.jsdelivr.net/gh/<owner>/olai-web@weights/<packet>` (CDN, ≤20 MB files — perfect for 2 MB packets; jsDelivr 403s brand-new repos until its crawler notices them — the cascade covers it)
 3. `https://<owner>.github.io/olai-web/…` (Pages, for the site's own manifests/samples)
 
 All three are GitHub; the graph just names packet paths, so mirrors are free.

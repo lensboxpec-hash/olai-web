@@ -1,0 +1,215 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>OLAI CHAT — pure frontend, packet-fed</title>
+<link rel="stylesheet" href="style.css">
+<style>
+  .nav { display:flex; gap:.75rem; flex-wrap:wrap; margin:.6rem 0 1rem; }
+  .nav a { padding:.35rem .8rem; border:1px solid var(--line,#3a4150); border-radius:999px; text-decoration:none; font-size:.9rem; }
+  .nav a.here { background:#e8e4d8; color:#141821; }
+  .loadbox { border:1px solid #3a4150; border-radius:10px; padding:1rem 1.2rem; margin:1rem 0; }
+  .btn { background:#e8e4d8; color:#141821; border:0; padding:.6rem 1.2rem; border-radius:8px; font-weight:700; cursor:pointer; font-size:1rem; }
+  .btn:disabled { opacity:.45; cursor:default; }
+  .bar { height:10px; background:#232833; border-radius:6px; overflow:hidden; margin:.5rem 0; }
+  .bar > i { display:block; height:100%; background:#9fd6b2; width:0%; transition:width .15s; }
+  .bar.pkt > i { background:#8ab8f0; }
+  .hint { color:#9aa3b2; font-size:.85rem; }
+  #chatlog { display:flex; flex-direction:column; gap:.8rem; margin:1rem 0; }
+  .msg { max-width:82%; padding:.6rem .9rem; border-radius:12px; white-space:pre-wrap; word-wrap:break-word; }
+  .msg.user { align-self:flex-end; background:#2c3547; }
+  .msg.bot  { align-self:flex-start; background:#1d2330; border:1px solid #333c4d; }
+  .msg.system { align-self:center; background:transparent; color:#9aa3b2; font-size:.85rem; }
+  .msg.bot .cursor { display:inline-block; width:.55em; height:1em; background:#9fd6b2; animation: blink 1s steps(1) infinite; vertical-align:-2px; }
+  @keyframes blink { 50% { opacity:0; } }
+  #row { display:flex; gap:.6rem; }
+  #in { flex:1; background:#161b26; color:#e8e4d8; border:1px solid #3a4150; border-radius:8px; padding:.6rem .8rem; font:inherit; }
+  #stats { color:#9aa3b2; font-size:.85rem; margin-top:.5rem; min-height:1.2em; }
+  .badge { display:inline-block; padding:.15rem .55rem; border-radius:999px; border:1px solid #3a4150; font-size:.8rem; color:#9fd6b2; }
+  .badge.warn { color:#f0b37e; }
+</style>
+</head>
+<body>
+<header>
+  <h1>ஓலை <span class="thin">OLAI CHAT</span></h1>
+  <p class="sub">
+    Real <b>LiquidAI/LFM2.5-350M</b> weights (LFM Open License v1.0), delivered as
+    <b>423 tiny sha256-verified packets</b> from GitHub — assembled in your browser,
+    no backend, no monolithic download. Engine: OLAI-JS f32, greedy-verified against PyTorch.
+  </p>
+  <nav class="nav">
+    <a class="here" href="chat.html">Chat</a>
+    <a href="graph.html">Graph</a>
+    <a href="packets.html">Packets</a>
+    <a href="index.html">Demo</a>
+  </nav>
+</header>
+
+<main>
+  <section id="loadbox" class="loadbox">
+    <div>
+      <b>Step 1 — page the weights in.</b>
+      551 MB as 423 packets (~2 MB raw each, zstd, every packet sha256-checked).
+      Cached by your browser after first load.
+      <span class="hint">Needs ~1.5 GB free RAM. Mobile: expect pain.</span>
+    </div>
+    <div style="margin:.7rem 0 .2rem">
+      <button id="btn-load" class="btn">Load model into this tab</button>
+      <span id="badge" class="badge warn">not loaded</span>
+    </div>
+    <div class="bar pkt"><i id="bar-pkt"></i></div>
+    <div id="load-msg" class="hint">idle — 0 / 423 packets</div>
+  </section>
+
+  <section id="chatside" hidden>
+    <div id="chatlog"></div>
+    <div id="row">
+      <input id="in" placeholder="Type a message… (Enter to send)" autocomplete="off">
+      <button id="btn-send" class="btn">Send</button>
+    </div>
+    <div id="stats"></div>
+  </section>
+</main>
+
+<footer class="hint" style="padding:0 1.5rem 2rem">
+  Honest notes: CPU engine ≈ 1–4 s/token (WebGPU kernels are next); greedy sampling;
+  first load downloads once, then it's browser cache. Packets & manifest live on
+  GitHub — view them under <a href="packets.html">Packets</a>.
+</footer>
+
+<script src="runtime/fzstd.js"></script>
+<script type="module">
+import { OlaiModel } from "./runtime/engine.js";
+import { OlaiTokenizer } from "./runtime/bpe.js";
+import { PacketFeed } from "./runtime/pktfeed.js";
+
+const $ = (id) => document.getElementById(id);
+const fmtMB = (b) => (b / 1048576).toFixed(1) + " MB";
+
+const REPO = "lensboxpec-hash/olai-web";
+const MIRRORS = [
+  `https://raw.githubusercontent.com/${REPO}/weights-lfm25/{f}`,
+  `https://cdn.jsdelivr.net/gh/${REPO}@weights-lfm25/{f}`,
+];
+
+let model = null, tok = null, messages = [], generating = false;
+
+function log(text, cls = "system") {
+  const el = document.createElement("div");
+  el.className = "msg " + cls;
+  el.textContent = text;
+  $("chatlog").appendChild(el);
+  window.scrollTo({ top: document.body.scrollHeight });
+  return el;
+}
+
+$("btn-load").addEventListener("click", async () => {
+  $("btn-load").disabled = true;
+  $("load-msg").textContent = "fetching graph manifest…";
+  try {
+    const graph = await (await fetch("graph/lfm25-full-graph.json")).json();
+    const cfg = await (await fetch("tokenizer/config.json")).json();
+
+    $("load-msg").textContent = "fetching tokenizer…";
+    tok = await OlaiTokenizer.load("tokenizer/tokenizer.json");
+
+    $("load-msg").textContent = "loading 0 / " +
+      graph.tensors.reduce((s, t) => s + t.packets.length, 0) + " packets…";
+    const feed = new PacketFeed(graph, MIRRORS, {
+      concurrency: 8,
+      onPacket: (done, total, doneB, totalB) => {
+        const pct = ((done / total) * 100).toFixed(1);
+        $("bar-pkt").style.width = pct + "%";
+        $("load-msg").textContent = `packets ${done} / ${total} (${pct}%) — ${fmtMB(doneB)} / ${fmtMB(totalB)} downloaded, every packet sha256-verified`;
+      },
+      onTensor: (name, i, n) => {
+        if (i % 20 === 0 || i === n) $("load-msg").textContent += ` · tensors ${i}/${n}`;
+      },
+    });
+    const t0 = performance.now();
+    const tensors = await feed.loadAll();
+    const secs = ((performance.now() - t0) / 1000).toFixed(1);
+
+    const ffnDim = graph.tensors.find((t) => t.name.endsWith("feed_forward.w1.weight")).shape[0];
+    model = new OlaiModel({ layerTypes: cfg.layer_types, ffnDim, vocab: cfg.vocab_size }, tensors);
+    $("badge").textContent = "loaded ✓";
+    $("badge").className = "badge";
+    $("load-msg").textContent =
+      `assembled ${graph.tensors.length} tensors from ${feed.verifiedPackets !== undefined ? "" + graph.stats.packets : ""} packets in ${secs}s — sha256 chain intact`;
+    $("chatside").hidden = false;
+    log(`Weights assembled in ${secs}s. ${graph.stats.packets} packets, ${fmtMB(graph.stats.comp_bytes)} over the wire, ${graph.stats.tensors} tensors. Say something!`);
+  } catch (e) {
+    $("load-msg").textContent = "LOAD FAILED: " + e.message;
+    $("load-msg").style.color = "#f0b37e";
+    $("btn-load").disabled = false;
+  }
+});
+
+async function send() {
+  const text = $("in").value.trim();
+  if (!text || !model || generating) return;
+  $("in").value = "";
+  log(text, "user");
+  messages.push({ role: "user", content: text });
+  generating = true;
+  $("btn-send").disabled = true;
+
+  const botEl = log("", "bot");
+  const cursor = document.createElement("span");
+  cursor.className = "cursor";
+  botEl.appendChild(cursor);
+
+  const t0 = performance.now();
+  try {
+    const prompt = tok.renderChat(messages);
+    const ids = tok.encode(prompt);
+    const genIds = [];
+
+    // prefill with live progress
+    log(`reading your message… ${ids.length} tokens`, "system");
+    let lastLog = 0;
+    for (let i = 0; i < ids.length - 1; i++) {
+      model.step(ids[i], false);
+      if (performance.now() - lastLog > 500) {
+        lastLog = performance.now();
+        $("stats").textContent = `prefill ${i + 1} / ${ids.length} tokens…`;
+        await new Promise((r) => setTimeout(r, 0));
+      }
+    }
+    let logits = model.step(ids[ids.length - 1], true);
+    $("stats").textContent = "generating…";
+
+    const tGen = performance.now();
+    let nTok = 0;
+    for (let i = 0; i < 160; i++) {
+      const next = model.argmax(logits);
+      if (next === 7) break; // <|im_end|>
+      genIds.push(next);
+      nTok++;
+      botEl.textContent = tok.decode(genIds);
+      botEl.appendChild(cursor);
+      logits = model.step(next, true);
+      const dt = (performance.now() - tGen) / 1000;
+      $("stats").textContent = `generating… ${nTok} tokens · ${(nTok / dt).toFixed(2)} tok/s · greedy, verified engine`;
+      await new Promise((r) => setTimeout(r, 0));
+    }
+    cursor.remove();
+    const reply = tok.decode(genIds);
+    messages.push({ role: "assistant", content: reply });
+    const dt = (performance.now() - tGen) / 1000;
+    $("stats").textContent = `done: ${nTok} tokens in ${dt.toFixed(1)}s (${(nTok / dt).toFixed(2)} tok/s) · prompt ${ids.length} tok`;
+  } catch (e) {
+    botEl.textContent += "\n[error: " + e.message + "]";
+  } finally {
+    generating = false;
+    $("btn-send").disabled = false;
+    $("in").focus();
+  }
+}
+
+$("btn-send").addEventListener("click", send);
+$("in").addEventListener("keydown", (e) => { if (e.key === "Enter") send(); });
+</script>
+</body>
+</html>

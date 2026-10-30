@@ -1,0 +1,209 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>OLAI GRAPH — the model as nodes + synapses</title>
+<link rel="stylesheet" href="style.css">
+<style>
+  .nav { display:flex; gap:.75rem; flex-wrap:wrap; margin:.6rem 0 1rem; }
+  .nav a { padding:.35rem .8rem; border:1px solid var(--line,#3a4150); border-radius:999px; text-decoration:none; font-size:.9rem; }
+  .nav a.here { background:#e8e4d8; color:#141821; }
+  .toolbar { display:flex; gap:.6rem; align-items:center; flex-wrap:wrap; margin: .8rem 0; }
+  .toolbar select, .toolbar input { background:#161b26; color:#e8e4d8; border:1px solid #3a4150; border-radius:8px; padding:.45rem .7rem; font:inherit; }
+  #cv { width:100%; height:72vh; background:#0f131c; border:1px solid #2a3140; border-radius:12px; cursor:grab; touch-action:none; }
+  #tip { position:fixed; pointer-events:none; background:#1d2330ee; border:1px solid #3a4150; border-radius:8px; padding:.5rem .7rem; font-size:.8rem; max-width:340px; display:none; z-index:9; }
+  .legend { display:flex; gap:1rem; flex-wrap:wrap; font-size:.85rem; color:#9aa3b2; margin:.4rem 0 0; }
+  .legend i { display:inline-block; width:11px; height:11px; border-radius:3px; margin-right:.3rem; }
+  #gstats { color:#9aa3b2; font-size:.9rem; }
+</style>
+</head>
+<body>
+<header>
+  <h1>ஓலை <span class="thin">OLAI GRAPH</span></h1>
+  <p class="sub">The same weights, re-dressed as a <b>graph of nodes and synapses</b>: every tensor is a node,
+  every node's weight bytes live in tiny sha256-addressed packets. Nothing pruned, nothing quantized.</p>
+  <nav class="nav">
+    <a href="chat.html">Chat</a>
+    <a class="here" href="graph.html">Graph</a>
+    <a href="packets.html">Packets</a>
+    <a href="index.html">Demo</a>
+  </nav>
+</header>
+
+<main>
+  <div class="toolbar">
+    <select id="model">
+      <option value="lfm3">Patient: LiquidAI/LFM3-1.7B (1,791 packets, 3.46 GB raw)</option>
+      <option value="lfm25">Runner: LiquidAI/LFM2.5-350M (423 packets, 709 MB raw)</option>
+    </select>
+    <input id="q" placeholder="filter tensors (e.g. layers.5.conv)">
+    <span id="gstats"></span>
+  </div>
+  <canvas id="cv"></canvas>
+  <div class="legend">
+    <span><i style="background:#e6c86e"></i>embedding / head (tied)</span>
+    <span><i style="background:#5fd3bc"></i>short-conv block</span>
+    <span><i style="background:#a78bfa"></i>attention block</span>
+    <span><i style="background:#6ea8fe"></i>feed-forward (SwiGLU)</span>
+    <span><i style="background:#8b93a7"></i>norms</span>
+    <span><i style="background:#565e6e"></i>gap / tail nodes</span>
+    <span>· small dots = packets (size ∝ bytes)</span>
+  </div>
+</main>
+<div id="tip"></div>
+
+<script type="module">
+const $ = (id) => document.getElementById(id);
+const cv = $("cv"), ctx = cv.getContext("2d");
+const tip = $("tip");
+
+const COLORS = {
+  embed: "#e6c86e", conv: "#5fd3bc", attn: "#a78bfa", ffn: "#6ea8fe",
+  norm: "#8b93a7", gap: "#565e6e", edge: "#2c3547", edgeHi: "#9fd6b2",
+};
+function kindOf(name, isCore) {
+  if (isCore) return name.includes("embed") ? "embed" : "norm";
+  if (name.includes("feed_forward")) return "ffn";
+  if (name.includes("conv")) return "conv";
+  if (name.includes("self_attn")) return "attn";
+  if (name.includes("norm")) return "norm";
+  return "gap";
+}
+
+let G = null, view = { x: 0, y: 0, s: 1 }, nodes = [], packets = [], edges = [];
+
+function layout(g) {
+  nodes = []; packets = []; edges = [];
+  const W = Math.max(2600, 220 * (g.layers.length + 2)), H = 1400;
+  const colW = W / (g.layers.length + 1);
+  const isCoreLayer = (L) => L.idx === -1;
+  g.layers.forEach((L, ci) => {
+    const cx = (ci + 0.5) * colW;
+    const ts = L.tensors
+      .map((n) => g.tensors.find((t) => t.name === n))
+      .filter(Boolean)
+      .sort((a, b) => a.id - b.id);
+    const totalH = ts.reduce((s, t) => s + nodeH(t), 0) + ts.length * 26;
+    let y = (H - totalH) / 2 + 13;
+    for (const t of ts) {
+      const h = nodeH(t);
+      const k = kindOf(t.name, isCoreLayer(L));
+      nodes.push({ t, x: cx, y, h, k });
+      for (const p of t.packets) packets.push({ p, t, x: cx, y: y + h + 10, k });
+      y += h + 26;
+    }
+  });
+  // synapse edges: column flow
+  for (let i = 0; i < nodes.length - 1; i++) {
+    const a = nodes[i], b = nodes[i + 1];
+    if (a.x !== b.x) edges.push([a, b]);
+  }
+  // head edge: embed (core col) → head
+  const embed = nodes.find((n) => n.t.name === "model.embed_tokens.weight");
+  if (embed) edges.push([embed, embed]); // self-synapse = lm_head tie
+}
+function nodeH(t) {
+  return Math.max(10, Math.min(64, 6 + 58 * Math.sqrt(t.nbytes / 1.35e8)));
+}
+
+function draw() {
+  const dpr = window.devicePixelRatio || 1;
+  cv.width = cv.clientWidth * dpr; cv.height = cv.clientHeight * dpr;
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  ctx.clearRect(0, 0, cv.clientWidth, cv.clientHeight);
+  ctx.save();
+  ctx.translate(view.x, view.y); ctx.scale(view.s, view.s);
+  // edges
+  ctx.strokeStyle = COLORS.edge; ctx.lineWidth = 1.2;
+  for (const [a, b] of edges) {
+    ctx.beginPath();
+    if (a === b) { // tied head loop
+      ctx.moveTo(a.x + 90, a.y + a.h / 2);
+      ctx.bezierCurveTo(a.x + 200, a.y - 160, a.x + 200, a.y + a.h + 160, a.x + 90, a.y + a.h / 2);
+    } else {
+      ctx.moveTo(a.x, a.y + a.h / 2);
+      ctx.bezierCurveTo((a.x + b.x) / 2, a.y, (a.x + b.x) / 2, b.y, b.x, b.y + b.h / 2);
+    }
+    ctx.stroke();
+  }
+  // packets
+  for (const pk of packets) {
+    const r = Math.max(1.1, Math.min(4.2, 0.8 * Math.sqrt(pk.p.comp / 40000)));
+    ctx.beginPath(); ctx.arc(pk.x + 34 + (pk.p.part % 12) * 9, pk.y + (Math.floor(pk.p.part / 12) % 4) * 7, r, 0, 7);
+    ctx.fillStyle = COLORS[pk.k]; ctx.globalAlpha = 0.55; ctx.fill(); ctx.globalAlpha = 1;
+  }
+  // nodes
+  for (const n of nodes) {
+    ctx.fillStyle = COLORS[n.k];
+    const w = Math.max(56, Math.min(180, 46 * Math.sqrt(n.t.nbytes / 1.35e8) + 26));
+    n.w = w;
+    ctx.beginPath(); ctx.roundRect(n.x - w / 2, n.y, w, n.h, 5); ctx.fill();
+    if (n.h >= 16 && view.s > 0.35) {
+      ctx.fillStyle = "#10141d"; ctx.font = "9px monospace";
+      ctx.fillText(n.t.name.split(".").slice(-2).join(".").slice(0, 16), n.x - w / 2 + 4, n.y + n.h - 4);
+    }
+  }
+  ctx.restore();
+}
+
+function hit(mx, my) {
+  const x = (mx - view.x) / view.s, y = (my - view.y) / view.s;
+  for (const n of nodes)
+    if (x > n.x - n.w / 2 && x < n.x + n.w / 2 && y > n.y && y < n.y + n.h) return n;
+  return null;
+}
+cv.addEventListener("mousemove", (e) => {
+  const r = cv.getBoundingClientRect();
+  const n = hit(e.clientX - r.left, e.clientY - r.top);
+  if (n) {
+    const t = n.t;
+    tip.style.display = "block";
+    tip.style.left = e.clientX + 14 + "px"; tip.style.top = e.clientY + 14 + "px";
+    tip.innerHTML = `<b>${t.name}</b><br>${t.dtype} ${JSON.stringify(t.shape)}<br>
+      ${(t.nbytes / 1048576).toFixed(2)} MB · ${t.packets.length} packet(s)<br>
+      sha₀: <code>${t.packets[0].sha256.slice(0, 16)}…</code>`;
+    cv.style.cursor = "pointer";
+  } else { tip.style.display = "none"; cv.style.cursor = "grab"; }
+});
+cv.addEventListener("click", (e) => {
+  const r = cv.getBoundingClientRect();
+  const n = hit(e.clientX - r.left, e.clientY - r.top);
+  if (n) location.href = "packets.html?model=" + ($("model").value === "lfm3" ? "lfm3" : "lfm25") + "&tensor=" + encodeURIComponent(n.t.name);
+});
+let drag = null;
+cv.addEventListener("pointerdown", (e) => { drag = { x: e.clientX, y: e.clientY, vx: view.x, vy: view.y }; cv.setPointerCapture(e.pointerId); });
+cv.addEventListener("pointermove", (e) => {
+  if (drag) { view.x = drag.vx + (e.clientX - drag.x); view.y = drag.vy + (e.clientY - drag.y); draw(); }
+});
+cv.addEventListener("pointerup", () => (drag = null));
+cv.addEventListener("wheel", (e) => {
+  e.preventDefault();
+  const r = cv.getBoundingClientRect(), mx = e.clientX - r.left, my = e.clientY - r.top;
+  const f = e.deltaY < 0 ? 1.12 : 0.89;
+  view.x = mx - (mx - view.x) * f; view.y = my - (my - view.y) * f; view.s *= f;
+  draw();
+}, { passive: false });
+
+async function load() {
+  const which = $("model").value;
+  const g = await (await fetch(which === "lfm3" ? "graph/lfm3-graph.json" : "graph/lfm25-full-graph.json")).json();
+  G = g;
+  layout(g);
+  view = { x: 40, y: 0, s: Math.min(1, cv.clientWidth / 2400) };
+  $("gstats").textContent =
+    `${g.stats.tensors} tensor nodes · ${g.stats.packets} packets · ${(g.stats.raw_bytes / 1e9).toFixed(2)} GB raw → ${(g.stats.comp_bytes / 1e9).toFixed(2)} GB packets (${(g.stats.ratio * 100).toFixed(1)}%) · codec ${g.codec_policy}`;
+  draw();
+}
+$("model").addEventListener("change", load);
+$("q").addEventListener("keydown", (e) => {
+  if (e.key !== "Enter") return;
+  const q = $("q").value.trim();
+  const n = nodes.find((nd) => nd.t.name.includes(q));
+  if (n) { view.x = cv.clientWidth / 2 - n.x * view.s; view.y = cv.clientHeight / 2 - n.y * view.s; draw(); }
+});
+window.addEventListener("resize", draw);
+load();
+</script>
+</body>
+</html>

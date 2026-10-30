@@ -1,0 +1,154 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>OLAI PACKETS — every packet, verifiable</title>
+<link rel="stylesheet" href="style.css">
+<style>
+  .nav { display:flex; gap:.75rem; flex-wrap:wrap; margin:.6rem 0 1rem; }
+  .nav a { padding:.35rem .8rem; border:1px solid var(--line,#3a4150); border-radius:999px; text-decoration:none; font-size:.9rem; }
+  .nav a.here { background:#e8e4d8; color:#141821; }
+  .toolbar { display:flex; gap:.6rem; align-items:center; flex-wrap:wrap; margin:.8rem 0; }
+  .toolbar select, .toolbar input { background:#161b26; color:#e8e4d8; border:1px solid #3a4150; border-radius:8px; padding:.45rem .7rem; font:inherit; }
+  .btn { background:#e8e4d8; color:#141821; border:0; padding:.45rem .9rem; border-radius:8px; font-weight:600; cursor:pointer; }
+  .btn.mini { padding:.15rem .55rem; font-size:.78rem; }
+  #totals { color:#9aa3b2; font-size:.9rem; }
+  table { border-collapse:collapse; width:100%; font-size:.85rem; }
+  th { text-align:left; color:#9aa3b2; border-bottom:1px solid #3a4150; padding:.4rem .5rem; position:sticky; top:0; background:#12161f; }
+  td { border-bottom:1px solid #232a38; padding:.32rem .5rem; font-family:ui-monospace,monospace; }
+  tr:hover td { background:#1a2130; }
+  .ok { color:#9fd6b2; } .bad { color:#f0b37e; } .pend { color:#8b93a7; }
+  code { font-size:.78rem; }
+</style>
+</head>
+<body>
+<header>
+  <h1>ஓலை <span class="thin">OLAI PACKETS</span></h1>
+  <p class="sub">The full packet database. Every row is a real object on GitHub — fetch it, unzip it,
+  sha256 it. The manifest (<code>graph/*.json</code>) is the map; the packets are the territory.</p>
+  <nav class="nav">
+    <a href="chat.html">Chat</a>
+    <a href="graph.html">Graph</a>
+    <a class="here" href="packets.html">Packets</a>
+    <a href="index.html">Demo</a>
+  </nav>
+</header>
+
+<main>
+  <div class="toolbar">
+    <select id="model">
+      <option value="lfm3">LFM3-1.7B — 1,791 packets (weights branch root)</option>
+      <option value="lfm25">LFM2.5-350M — 423 packets (weights branch /lfm25)</option>
+    </select>
+    <input id="q" placeholder="filter by tensor name…">
+    <button class="btn mini" id="btn-verify">Fetch + verify 12 random packets</button>
+    <span id="totals"></span>
+  </div>
+  <div style="max-height:70vh; overflow:auto;">
+    <table>
+      <thead><tr><th>#</th><th>file</th><th>tensor</th><th>part</th><th>raw</th><th>zstd</th><th>sha256 (first 12)</th><th>check</th></tr></thead>
+      <tbody id="rows"></tbody>
+    </table>
+    <div style="text-align:center; padding:.6rem"><button class="btn" id="btn-more" hidden>show 200 more</button></div>
+  </div>
+</main>
+
+<script type="module">
+const $ = (id) => document.getElementById(id);
+const REPO = "lensboxpec-hash/olai-web";
+const BASE = {
+  lfm3: [
+    `https://raw.githubusercontent.com/${REPO}/weights/{f}`,
+    `https://cdn.jsdelivr.net/gh/${REPO}@weights/{f}`,
+  ],
+  lfm25: [
+    `https://raw.githubusercontent.com/${REPO}/weights-lfm25/{f}`,
+    `https://cdn.jsdelivr.net/gh/${REPO}@weights-lfm25/{f}`,
+  ],
+};
+
+let G = null, flat = [], shown = 0, which = "lfm3";
+const fmtKB = (b) => b >= 1048576 ? (b / 1048576).toFixed(2) + " MB" : (b / 1024).toFixed(1) + " KB";
+const hex12 = (s) => `<code>${s.slice(0, 12)}…</code>`;
+
+async function load() {
+  which = $("model").value;
+  const url = which === "lfm3" ? "graph/lfm3-graph.json" : "graph/lfm25-full-graph.json";
+  G = await (await fetch(url)).json();
+  flat = [];
+  for (const t of G.tensors) for (const p of t.packets) flat.push({ t, p });
+  const params = new URLSearchParams(location.search);
+  if (params.get("tensor")) $("q").value = params.get("tensor");
+  if (params.get("model")) $("model").value = params.get("model"), (which = params.get("model"));
+  render(true);
+  $("totals").textContent = `${flat.length} packets · ${fmtKB(G.stats.raw_bytes)} raw → ${fmtKB(G.stats.comp_bytes)} packed (${(G.stats.ratio * 100).toFixed(1)}%)`;
+}
+function visible() {
+  const q = $("q").value.trim();
+  return q ? flat.filter((x) => x.t.name.includes(q)) : flat;
+}
+function render(reset) {
+  const tb = $("rows");
+  if (reset) { tb.innerHTML = ""; shown = 0; }
+  const vis = visible();
+  const chunk = vis.slice(shown, shown + 200);
+  for (const { t, p } of chunk) {
+    const tr = document.createElement("tr");
+    tr.innerHTML = `<td></td><td>${p.f}</td><td>${t.name}</td><td>${p.part}</td>
+      <td>${fmtKB(p.raw)}</td><td>${fmtKB(p.comp)}</td><td>${hex12(p.sha256)}</td>
+      <td><button class="btn mini">verify</button> <span class="pend">—</span></td>`;
+    tr.querySelector("button").addEventListener("click", (e) => verifyOne(e.target, p));
+    tb.appendChild(tr);
+  }
+  shown += chunk.length;
+  $("btn-more").hidden = shown >= vis.length;
+  $("btn-more").textContent = `show ${Math.min(200, vis.length - shown)} more of ${vis.length}`;
+}
+$("q").addEventListener("input", () => render(true));
+$("model").addEventListener("change", load);
+$("btn-more").addEventListener("click", () => render(false));
+
+async function verifyOne(btn, p) {
+  const st = btn.parentElement.querySelector("span");
+  st.className = "pend"; st.textContent = "fetching…";
+  for (const tpl of BASE[which]) {
+    try {
+      const res = await fetch(tpl.replace("{f}", p.f));
+      if (!res.ok) throw new Error("HTTP " + res.status);
+      const buf = new Uint8Array(await res.arrayBuffer());
+      const dv = new DataView(buf.buffer);
+      const magic = new TextDecoder().decode(buf.slice(0, 4));
+      if (magic !== "OLPG") throw new Error("bad magic " + magic);
+      const codec = dv.getUint8(6);
+      const rawLen = Number(dv.getBigUint64(20, true));
+      const nameLen = dv.getUint16(28, true);
+      const payload = buf.slice(30 + nameLen + 32);
+      let raw = codec === 1 ? globalThis.fzstd.decompress(payload) : payload;
+      if (raw.length !== rawLen) throw new Error(`rawLen ${raw.length} != ${rawLen}`);
+      const digest = await crypto.subtle.digest("SHA-256", raw);
+      const hex = [...new Uint8Array(digest)].map((b) => b.toString(16).padStart(2, "0")).join("");
+      if (hex !== p.sha256) throw new Error("sha mismatch");
+      st.className = "ok"; st.textContent = `OK ${(buf.length / 1024).toFixed(0)}KB ✓ sha ✓`;
+      return;
+    } catch (e) { /* try next mirror */ }
+  }
+  st.className = "bad"; st.textContent = "FAILED ✗";
+}
+$("btn-verify").addEventListener("click", async () => {
+  const vis = visible();
+  const picked = new Set();
+  while (picked.size < Math.min(12, vis.length)) picked.add(Math.floor(Math.random() * vis.length));
+  const btns = [...document.querySelectorAll("#rows button")];
+  let i = 0;
+  for (const idx of picked) {
+    const { t, p } = vis[idx];
+    // find the rendered row for this packet (match by file+part)
+    const btn = btns.find((b) => b.closest("tr").cells[1].textContent === p.f && b.closest("tr").cells[3].textContent === String(p.part));
+    if (btn) { verifyOne(btn, p); if (++i % 4 === 0) await new Promise((r) => setTimeout(r, 50)); }
+  }
+});
+load();
+</script>
+</body>
+</html>

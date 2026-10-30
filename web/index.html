@@ -3,64 +3,99 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>ஓலை OLAI-GRAPH — LFM3 as tiny packets, 100% frontend</title>
+<title>ஓலை OLAI — LFM3 as tiny packets, 100% frontend</title>
 <link rel="stylesheet" href="style.css">
+<style>
+  .cards { display:grid; grid-template-columns:repeat(auto-fit,minmax(240px,1fr)); gap:1rem; margin:1.2rem 0; }
+  .card { border:1px solid #3a4150; border-radius:14px; padding:1.2rem 1.3rem; text-decoration:none; color:inherit; display:block; transition:transform .12s, border-color .12s; }
+  .card:hover { transform:translateY(-3px); border-color:#9fd6b2; }
+  .card h2 { margin:.1rem 0 .5rem; font-size:1.25rem; }
+  .card p { color:#9aa3b2; font-size:.92rem; margin:0; }
+  .nav { display:flex; gap:.75rem; flex-wrap:wrap; margin:.6rem 0 1rem; }
+  .nav a { padding:.35rem .8rem; border:1px solid var(--line,#3a4150); border-radius:999px; text-decoration:none; font-size:.9rem; }
+  .nav a.here { background:#e8e4d8; color:#141821; }
+  #bootstats { color:#9aa3b2; font-size:.9rem; }
+  .kpi { display:flex; gap:1.4rem; flex-wrap:wrap; margin:.8rem 0; }
+  .kpi b { font-size:1.5rem; display:block; color:#9fd6b2; }
+</style>
 </head>
 <body>
 <header>
   <h1>ஓலை <span class="thin">OLAI-GRAPH</span></h1>
-  <p class="sub">
-    <b>LiquidAI/LFM3-1.7B</b> re-dressed as a graph of tiny self-verifying packets —
-    no backend, no monolithic download. The browser is the runner.
-  </p>
-  <p id="gpu-status" class="hint">probing WebGPU…</p>
+  <p class="sub"><b>LiquidAI/LFM3-1.7B</b> and its sibling <b>LFM2.5-350M</b>, re-dressed as graphs of tiny
+  sha256-verified packets — no backend, no monolithic download. The browser is the runner.</p>
+  <nav class="nav">
+    <a class="here" href="index.html">Home</a>
+    <a href="chat.html">Chat</a>
+    <a href="graph.html">Graph</a>
+    <a href="packets.html">Packets</a>
+    <a href="demo.html">Demo</a>
+  </nav>
 </header>
 
 <main>
-  <section>
-    <h2>1 · The patient, mapped</h2>
-    <div id="lfm3-stats" class="panel">loading graph…</div>
-  </section>
+  <div class="kpi" id="bootstats">loading manifests…</div>
+
+  <div class="cards">
+    <a class="card" href="chat.html">
+      <h2>💬 Chat</h2>
+      <p>Actually talk to the model. LFM2.5-350M weights streamed in as 423 packets, assembled in-RAM,
+      greedy-verified against PyTorch. Pure frontend.</p>
+    </a>
+    <a class="card" href="graph.html">
+      <h2>🕸 Graph</h2>
+      <p>The model as nodes + synapses: every tensor a node, every packet a synapse. Pan, zoom, hover, click.
+      LFM3 patient (1,791 packets) and the 350M runner.</p>
+    </a>
+    <a class="card" href="packets.html">
+      <h2>📦 Packets</h2>
+      <p>The full packet database — every row is a real GitHub object. Fetch any packet, unzip it,
+      sha256 it against the manifest yourself.</p>
+    </a>
+    <a class="card" href="demo.html">
+      <h2>🔬 Demo</h2>
+      <p>Low-level bench: fetch a live packet, verify it, run a WebGPU mat-vec on real patient weights.</p>
+    </a>
+  </div>
 
   <section>
-    <h2>2 · Paging plan (the graph walk order)</h2>
-    <div id="plan" class="panel scroll">loading…</div>
-  </section>
-
-  <section>
-    <h2>3 · Real packets, right now</h2>
-    <div id="sample-stats" class="panel">loading…</div>
-    <button id="btn-packet" disabled>Fetch + verify a real weight packet</button>
-    <div id="packet-view" class="panel">—</div>
-    <button id="btn-gemv" disabled>Run a GPU mat-vec on REAL patient weights</button>
-    <div id="gemv-view" class="panel">— (needs WebGPU)</div>
-  </section>
-
-  <section>
-    <h2>4 · Doctrine</h2>
+    <h2>Doctrine</h2>
     <div class="panel">
       <ul>
         <li><b>No pruning.</b> Every byte of the weight file lands in exactly one packet — even unclaimed bytes become <code>__gap__</code>/<code>__file_tail__</code> nodes.</li>
         <li><b>No quantization.</b> Payload bytes are the patient's own bytes; zstd is bit-exact on decode. Roundtrip proven: <code>1c9c77a4…3ea4e</code>.</li>
         <li><b>No "impossible".</b> Same information, new shape — chosen so HTTP, CDNs, browsers and WebGPU can all chew it.</li>
+        <li><b>Honest ledger.</b> LFM3 raw 3.46 GB → 1,791 packets ≈ 2.70 GB over the wire (−22.0%); LFM2.5 raw 709 MB → 423 packets ≈ 551 MB (−22.3%). Verified bit-exact on assembly.</li>
       </ul>
     </div>
   </section>
 
   <section>
-    <h2>Console</h2>
-    <div id="console" class="panel scroll"></div>
+    <h2>How the web architecture works</h2>
+    <div class="panel">
+      <ol>
+        <li><b>Pack (CI, GitHub PAT):</b> stream the safetensors → 2 MB packets (zstd, per-packet sha256) + graph manifest. Batched pushes to the <code>weights</code> branch.</li>
+        <li><b>Manifest = the map:</b> <code>graph/*.json</code> lists every tensor and its packets with checksums.</li>
+        <li><b>Browser pages it in:</b> the runtime walks the manifest, fetches packets with bounded concurrency from mirrors (raw.githubusercontent + jsDelivr), verifies each sha256, widens bf16→f32 losslessly.</li>
+        <li><b>Run:</b> OLAI-JS engine executes the exact LFM2.5 forward — output greedy-identical to PyTorch (verified in CI).</li>
+      </ol>
+    </div>
   </section>
 </main>
 
-<footer>
-  Weights © Liquid AI — LFM Open License v1.0 (redistribution permitted with
-  attribution; this is a mechanical transformation). Format & runtime: OLAI project.
-  <a href="https://github.com/lensboxpec-hash/olai-web">source</a> ·
-  <a href="https://huggingface.co/LiquidAI/LFM3-1.7B">patient</a>
-</footer>
-
-<script src="runtime/fzstd.js"></script>
-<script type="module" src="app.js"></script>
+<script type="module">
+const $ = (id) => document.getElementById(id);
+Promise.all([
+  fetch("graph/lfm3-graph.json").then((r) => r.json()),
+  fetch("graph/lfm25-full-graph.json").then((r) => r.json()),
+]).then(([g3, g25]) => {
+  const gb = (b) => (b / 1e9).toFixed(2) + " GB";
+  $("bootstats").innerHTML = `
+    <span><b>${g3.stats.packets}</b>LFM3 packets (${gb(g3.stats.raw_bytes)} → ${gb(g3.stats.comp_bytes)})</span>
+    <span><b>${g25.stats.packets}</b>LFM2.5 packets (${gb(g25.stats.raw_bytes)} → ${gb(g25.stats.comp_bytes)})</span>
+    <span><b>2,214</b>total packets on GitHub</span>
+    <span><b>0</b>servers running inference</span>`;
+});
+</script>
 </body>
 </html>

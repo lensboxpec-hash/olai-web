@@ -51,10 +51,12 @@ export async function decodePacket(buf, fzstd) {
   return { ...p, raw };
 }
 
-/** bf16 (Uint16 little endian) -> Float32Array */
+/** bf16 (Uint16 little endian) -> Float32Array — lossless widening (no Float16Array needed). */
 export function bf16ToF32(u16) {
   const out = new Float32Array(u16.length);
-  const f16 = new Float16Array(u16.buffer, u16.byteOffset, u16.length);
-  for (let i = 0; i < u16.length; i++) out[i] = f16[i];
+  const u32 = new Uint32Array(out.buffer);
+  for (let i = 0; i < u16.length; i++) {
+    u32[i] = (u16[i] << 16) >>> 0;
+  }
   return out;
 }

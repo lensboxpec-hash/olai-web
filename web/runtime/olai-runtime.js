@@ -54,10 +54,20 @@ export class PacketStore {
         const res = await fetch(url, { mode: "cors" });
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
         const buf = await res.arrayBuffer();
-        // verify when we know what to expect
+        // verify when we know what to expect: hash the PAYLOAD (codec-aware),
+        // matching both the packet's own header and the manifest entry
         if (expectSha) {
-          const hex = await sha256Hex(new Uint8Array(buf));
-          if (hex !== expectSha) throw new Error(`sha mismatch from ${url}`);
+          const p = parsePacket(buf);
+          let raw = p.payload;
+          if (p.codec === 1) {
+            const lib = globalThis.fzstd;
+            if (!lib) throw new Error("zstd packet but fzstd not loaded");
+            raw = lib.decompress(p.payload);
+          }
+          const hex = await sha256Hex(raw);
+          if (hex !== p.shaHex || hex !== expectSha) {
+            throw new Error(`sha mismatch from ${url}`);
+          }
           this.stats.verified++;
         }
         this.stats.fetches++;
@@ -84,7 +94,14 @@ export class PagedEngine {
     this.log = [];
   }
 
-  static bytesOf(t) { return t.packets.reduce((s, p) => s + (p.raw ?? t.nbytes), 0); }
+  static bytesOf(t) {
+    if (!t.packets.length) return 0;
+    // packed manifest: sum real raw sizes; plan-only manifest: count once
+    if (t.packets[0].raw != null) {
+      return t.packets.reduce((s, p) => s + p.raw, 0);
+    }
+    return t.nbytes;
+  }
 
   totalBytes() { return this.man.tensors.reduce((s, t) => s + PagedEngine.bytesOf(t), 0); }
 

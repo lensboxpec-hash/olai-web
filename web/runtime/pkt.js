@@ -39,8 +39,9 @@ export async function decodePacket(buf, fzstd) {
   const p = parsePacket(buf);
   let raw;
   if (p.codec === 1) {
-    if (!fzstd) throw new Error("zstd packet but no fzstd decoder provided");
-    raw = fzstd.decompress(p.payload);
+    const lib = fzstd || globalThis.fzstd;
+    if (!lib) throw new Error("zstd packet but fzstd not loaded (add runtime/fzstd.js script)");
+    raw = lib.decompress(p.payload);
   } else {
     raw = p.payload;
   }
